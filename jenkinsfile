@@ -1,0 +1,62 @@
+
+pipeline {
+    agent any
+    environment {
+        DOCKER_IMAGE   = 'YOUR_DOCKERHUB_USERNAME/calcwebapp'
+        IMAGE_TAG      = "\${BUILD_NUMBER}"
+        GIT_OPS_REPO   = '://github.com'
+    }
+    stages {
+        stage('Fetch Source') {
+            steps {
+                checkout scm
+            }
+        }
+stage('SonarQube Security Scan') {
+steps {
+withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_KEY')]) {
+sh "mvn sonar:sonar -Dsonar.projectKey=calcapp -Dsonar.host.url=http://localhost:9000 -Dsonar.token=${SONAR_KEY}"
+}
+}
+}
+stage('Maven Package Compilation') {
+steps {
+sh 'mvn clean package'
+}
+}
+stage('Dockerize Image & Enforce Trivy Policy') {
+steps {
+sh "docker build -t \({DOCKER_IMAGE}:\){IMAGE_TAG} ."
+sh "trivy image --exit-code 1 --severity HIGH,CRITICAL \({DOCKER_IMAGE}:\){IMAGE_TAG}"
+}
+}
+stage('Push to DockerHub') {
+steps {
+withCredentials([string(credentialsId: 'dockerhub-creds', variable: 'DOCKER_TOKEN')]) {
+sh "echo ${DOCKER_TOKEN} | docker login -u YOUR_DOCKERHUB_USERNAME --password-stdin"
+sh "docker push \({DOCKER_IMAGE}:\){IMAGE_TAG}"
+sh "docker tag ${DOCKER_IMAGE}:\(IMAGE_{T}AG\){DOCKER_IMAGE}:latest"
+sh "docker push ${DOCKER_IMAGE}:latest"
+}
+}
+}
+stage('GitOps Deployment Commit') {
+steps {
+withCredentials([string(credentialsId: 'github-token', variable: 'GH_TOKEN')]) {
+sh """
+git config --global user.email "jenkins@devsecops.com"
+git config --global user.name "Jenkins Automation"
+rm -rf calc-gitops-manifests
+git clone https://\({GH_TOKEN}@\){GIT_OPS_REPO}
+cd calc-gitops-manifests
+sed -i 's|image: .*|image: \({DOCKER_IMAGE}:\){IMAGE_TAG}|g' deployment.yaml
+git add deployment.yaml
+git commit -m "Auto-update application image tag to version ${IMAGE_TAG}"
+git push origin main
+"""
+}
+}
+}
+}
+}
+```
